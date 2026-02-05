@@ -1,118 +1,34 @@
-import os
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from pydantic import BaseModel
-from typing import List, Optional
 import yfinance as yf
 import httpx
 import asyncio
 import logging
-import pandas as pd
+import pandas as pd # Needed for calculations
 
-# ---------------------------------------------------------
-# 🔐 SECRETS (NOW HIDDEN IN THE VAULT)
-# ---------------------------------------------------------
-# We use os.getenv to pull them from Render's safe
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-RENDER_URL = "https://ape-brain.onrender.com" 
-# ---------------------------------------------------------
-
-# Logging
+# Set up logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("ApeSentinel")
+logger = logging.getLogger("ApeBrain")
 
-# 🧠 MEMORY (The Watchlist lives here for now)
-WATCHLIST = {}
-
-# Data Models
-class StockData(BaseModel):
-    symbol: str
-    target1: Optional[float] = None
-    target2: Optional[float] = None
-    target3: Optional[float] = None
-    stopLoss: Optional[float] = None
-
-class SyncRequest(BaseModel):
-    stocks: List[StockData]
-
-# 📡 TELEGRAM SENDER
-async def send_telegram_alert(message: str):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.error("❌ Telegram Secrets missing in Environment Variables!")
-        return
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    async with httpx.AsyncClient() as client:
-        try:
-            await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message})
-            logger.info(f"📨 Sent: {message}")
-        except Exception as e:
-            logger.error(f"❌ Failed to send Telegram: {e}")
-
-# 👁️ THE SENTINEL (Background Loop - Checks every 60s)
-async def monitor_market():
-    logger.info("👁️ Sentinel Started Watching...")
-    await asyncio.sleep(5) # Give it a moment to wake up
-    await send_telegram_alert("🦍 APE SENTINEL REBOOTED & SECURE.")
-    
-    while True:
-        try:
-            await asyncio.sleep(60) # Check every 60 seconds
-            
-            if not WATCHLIST:
-                continue 
-
-            for symbol, data in list(WATCHLIST.items()):
-                try:
-                    ticker = yf.Ticker(symbol)
-                    price = ticker.fast_info.last_price
-                    
-                    if price is None: continue
-
-                    # 1. CHECK TARGET 1
-                    if data['t1'] and price >= data['t1'] and 't1' not in data['alerted']:
-                        await send_telegram_alert(f"🚀 {symbol} HIT TARGET 1 @ ${price:.2f}")
-                        WATCHLIST[symbol]['alerted'].append('t1')
-
-                    # 2. CHECK TARGET 2
-                    if data['t2'] and price >= data['t2'] and 't2' not in data['alerted']:
-                        await send_telegram_alert(f"💰 {symbol} SMASHED TARGET 2 @ ${price:.2f}")
-                        WATCHLIST[symbol]['alerted'].append('t2')
-
-                    # 3. CHECK TARGET 3
-                    if data['t3'] and price >= data['t3'] and 't3' not in data['alerted']:
-                        await send_telegram_alert(f"💸 {symbol} NUCLEAR TARGET 3 @ ${price:.2f}")
-                        WATCHLIST[symbol]['alerted'].append('t3')
-                    
-                    # 4. CHECK STOP LOSS
-                    if data['stop'] and price <= data['stop'] and 'stop' not in data['alerted']:
-                        await send_telegram_alert(f"🩸 {symbol} STOP LOSS HIT @ ${price:.2f}")
-                        WATCHLIST[symbol]['alerted'].append('stop')
-
-                except Exception as e:
-                    logger.error(f"⚠️ Error checking {symbol}: {e}")
-
-        except Exception as e:
-            logger.error(f"Sentinel Loop Error: {e}")
-
-# 🦍 SELF-PRESERVATION
+# 🦍 SELF-PRESERVATION PROTOCOL
 async def keep_alive():
+    url = "https://ape-brain.onrender.com"  # <--- CONFIRM THIS IS YOUR URL
     while True:
         try:
-            await asyncio.sleep(840) # 14 mins
+            await asyncio.sleep(840)  # 14 minutes
             async with httpx.AsyncClient() as client:
-                await client.get(RENDER_URL)
-                logger.info("❤️ Heartbeat")
-        except:
-            pass
+                response = await client.get(url)
+                logger.info(f"❤️ Heartbeat Sent: {response.status_code}")
+        except Exception as e:
+            logger.error(f"💔 Heartbeat Failed: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(monitor_market())
+    logger.info("🦍 Ape Brain Waking Up...")
     asyncio.create_task(keep_alive())
     yield
+    logger.info("🦍 Ape Brain Sleeping...")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -126,55 +42,48 @@ app.add_middleware(
 
 @app.get("/")
 def home():
-    return {"message": "Ape Sentinel Online 👁️", "watching": len(WATCHLIST)}
-
-# 🔄 SYNC ENDPOINT
-@app.post("/sync")
-def sync_watchlist(request: SyncRequest):
-    global WATCHLIST
-    new_watchlist = {}
-    
-    for stock in request.stocks:
-        existing_alerts = []
-        if stock.symbol in WATCHLIST:
-            existing_alerts = WATCHLIST[stock.symbol].get('alerted', [])
-            
-        new_watchlist[stock.symbol] = {
-            "t1": stock.target1,
-            "t2": stock.target2,
-            "t3": stock.target3,
-            "stop": stock.stopLoss,
-            "alerted": existing_alerts
-        }
-    
-    WATCHLIST = new_watchlist
-    logger.info(f"📥 Synced {len(WATCHLIST)} stocks from App")
-    return {"status": "ok", "watching": len(WATCHLIST)}
+    return {"message": "Ape Brain Online & Thinking 🧠"}
 
 @app.get("/quote/{symbol}")
 def get_quote(symbol: str):
     try:
         ticker = yf.Ticker(symbol)
+        
+        # 1. Get Live Data
         price = ticker.fast_info.last_price
         prev_close = ticker.fast_info.previous_close
         
-        change_percent = ((price - prev_close) / prev_close) * 100 if prev_close else 0.0
+        if prev_close and prev_close != 0:
+            change_percent = ((price - prev_close) / prev_close) * 100
+        else:
+            change_percent = 0.0
 
+        # 2. THE WEINSTEIN CALCULATION (SMA 30)
+        # Fetch 1 year of weekly data to calculate 30-week MA
         hist = ticker.history(period="1y", interval="1wk")
+        
         sma_30 = None
         stage = "UNKNOWN"
+        
         if len(hist) >= 30:
+            # Calculate the 30-week Simple Moving Average
             hist['SMA_30'] = hist['Close'].rolling(window=30).mean()
-            sma_30 = hist['SMA_30'].iloc[-1]
-            if sma_30 and price > sma_30: stage = "UPTREND"
-            elif sma_30 and price < sma_30: stage = "DOWNTREND"
+            sma_30 = hist['SMA_30'].iloc[-1] # Get the latest value
+            
+            # Determine Basic Stage
+            if sma_30 and price > sma_30:
+                stage = "UPTREND" # Potential Stage 2
+            elif sma_30 and price < sma_30:
+                stage = "DOWNTREND" # Potential Stage 4
 
         return {
             "symbol": symbol.upper(),
             "price": price,
             "changePercent": change_percent,
-            "sma30": sma_30 if sma_30 else 0.0,
-            "stage": stage
+            "sma30": sma_30, # Sending the calculated MA to Flutter
+            "stage": stage   # Sending the verdict
         }
+
     except Exception as e:
+        logger.error(f"Error fetching {symbol}: {e}")
         raise HTTPException(status_code=404, detail="Stock not found")
