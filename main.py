@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -10,10 +11,11 @@ import logging
 import pandas as pd
 
 # ---------------------------------------------------------
-# 🔐 SECRETS (ARMED & READY)
+# 🔐 SECRETS (NOW HIDDEN IN THE VAULT)
 # ---------------------------------------------------------
-TELEGRAM_TOKEN = "8151699023:AAE-S5zM6rigQwaQMJ3AXgYHJzxPQaaS9W0"
-TELEGRAM_CHAT_ID = "7086092666"
+# We use os.getenv to pull them from Render's safe
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RENDER_URL = "https://ape-brain.onrender.com" 
 # ---------------------------------------------------------
 
@@ -37,6 +39,10 @@ class SyncRequest(BaseModel):
 
 # 📡 TELEGRAM SENDER
 async def send_telegram_alert(message: str):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.error("❌ Telegram Secrets missing in Environment Variables!")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     async with httpx.AsyncClient() as client:
         try:
@@ -48,7 +54,8 @@ async def send_telegram_alert(message: str):
 # 👁️ THE SENTINEL (Background Loop - Checks every 60s)
 async def monitor_market():
     logger.info("👁️ Sentinel Started Watching...")
-    await send_telegram_alert("🦍 APE SENTINEL IS ONLINE. WATCHING MARKETS.")
+    await asyncio.sleep(5) # Give it a moment to wake up
+    await send_telegram_alert("🦍 APE SENTINEL REBOOTED & SECURE.")
     
     while True:
         try:
@@ -121,14 +128,13 @@ app.add_middleware(
 def home():
     return {"message": "Ape Sentinel Online 👁️", "watching": len(WATCHLIST)}
 
-# 🔄 SYNC ENDPOINT (Flutter calls this)
+# 🔄 SYNC ENDPOINT
 @app.post("/sync")
 def sync_watchlist(request: SyncRequest):
     global WATCHLIST
     new_watchlist = {}
     
     for stock in request.stocks:
-        # Preserve history if exists
         existing_alerts = []
         if stock.symbol in WATCHLIST:
             existing_alerts = WATCHLIST[stock.symbol].get('alerted', [])
@@ -154,7 +160,6 @@ def get_quote(symbol: str):
         
         change_percent = ((price - prev_close) / prev_close) * 100 if prev_close else 0.0
 
-        # Weinstein Logic
         hist = ticker.history(period="1y", interval="1wk")
         sma_30 = None
         stage = "UNKNOWN"
